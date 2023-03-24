@@ -2,12 +2,12 @@ package snapshot
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
-	"fmt"
-	"strings"
 	"path/filepath"
-	"errors"
+	"strings"
 
 	xclient "github.com/openfs/rsync-tools/client"
 	xfs "github.com/openfs/rsync-tools/fs"
@@ -46,16 +46,16 @@ type EntryDir struct {
 
 type ResEntryDir struct {
 	Content []EntryDir `json:"content"`
-	Next int `json:"next,omitempty"`
+	Next    int        `json:"next,omitempty"`
 }
 
 const (
 	defaultCount = 1000
 )
 
-func diffSnapshotsDir(c *xclient.Client, sid, did int, dir string) ([]EntryDir, error) {
+func diffSnapshotsDir(c *xclient.Client, sid, did, dir string) ([]EntryDir, error) {
 	res := make([]EntryDir, 0, 0)
-	urlStr := fmt.Sprintf("https://%s/api/v1/snapshots/%d/diff/%d/%s",c.Ip, sid, did, strings.TrimPrefix(dir, "/"))
+	urlStr := fmt.Sprintf("https://%s/api/v1/snapshots/%s/diff/%s/%s", c.Ip, sid, did, strings.TrimPrefix(dir, "/"))
 	u, err := url.Parse(urlStr)
 	if err != nil {
 		return res, err
@@ -91,24 +91,24 @@ func diffSnapshotsDir(c *xclient.Client, sid, did int, dir string) ([]EntryDir, 
 }
 
 type EntryFile struct {
-	Length int `json:"length"`
-	Type string `json:"type"`
-	Offset int `json:"offset"`
+	Length int    `json:"length"`
+	Type   string `json:"type"`
+	Offset int    `json:"offset"`
 }
 
 type ResEntryFile struct {
 	Content []EntryFile `json:"content"`
-	Next int `json:"next,omitempty"`
+	Next    int         `json:"next,omitempty"`
 }
 
 var ErrInvalidFile = errors.New("file path should be '/'")
 
-func diffSnapshotsFile(c *xclient.Client, sid, did int, file string) ([]EntryFile, error) {
+func diffSnapshotsFile(c *xclient.Client, sid, did, file string) ([]EntryFile, error) {
 	res := make([]EntryFile, 0, 0)
 	if file == "" || file == "/" {
 		return res, ErrInvalidFile
 	}
-	urlStr := fmt.Sprintf("https://%s/api/v1/snapshots/%d/diff/%d/%s",c.Ip, sid, did, strings.TrimPrefix(file, "/"))
+	urlStr := fmt.Sprintf("https://%s/api/v1/snapshots/%s/diff/%s/%s", c.Ip, sid, did, strings.TrimPrefix(file, "/"))
 	u, err := url.Parse(urlStr)
 	if err != nil {
 		return res, err
@@ -143,35 +143,136 @@ func diffSnapshotsFile(c *xclient.Client, sid, did int, file string) ([]EntryFil
 }
 
 type EntryDiff struct {
-	Name string
-	Type string
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
-func DiffSnapshots(c *xclient.Client, sid, did int, path string, recursive bool) ([]EntryDiff, error) {
+func deleteDiff(c *xclient.Client, path, sid string) ([]EntryDiff, error) {
 	res := make([]EntryDiff, 0, 0)
-	s, err := xfs.Stat(c, path)
+	res = append(res, EntryDiff{
+		Name: path,
+		Type: "DELETE",
+	})
+	s, err := xfs.Stat(c, path, sid)
 	if err != nil {
 		return res, err
 	}
-	if s.IsDir {
+	if s.FileType == "directory" {
+		readdirRes, err := xfs.ReaddirRecursive(c, path, sid)
+		if err != nil {
+			return res, err
+		}
+		for _, re := range readdirRes {
+			childpath := filepath.Join(path, re.Name)
+			if re.FileType == "directory" {
+				childpath += "/"
+			}
+			res = append(res, EntryDiff{
+				Name: childpath,
+				Type: "DELETE",
+			})
+		}
+	}
+
+	return res, nil
+}
+
+func createDiff(c *xclient.Client, path, did string) ([]EntryDiff, error) {
+	res := make([]EntryDiff, 0, 0)
+	res = append(res, EntryDiff{
+		Name: path,
+		Type: "CREATE",
+	})
+	s, err := xfs.Stat(c, path, did)
+	if err != nil {
+		return res, err
+	}
+	if s.FileType == "directory" {
+		readdirRes, err := xfs.ReaddirRecursive(c, path, did)
+		if err != nil {
+			return res, err
+		}
+		for _, re := range readdirRes {
+			childpath := filepath.Join(path, re.Name)
+			if re.FileType == "directory" {
+				childpath += "/"
+			}
+			res = append(res, EntryDiff{
+				Name: childpath,
+				Type: "CREATE",
+			})
+		}
+	}
+	return res, nil
+}
+
+func diffSnapshots(c *xclient.Client, sid, did, path string, checkType bool) ([]EntryDiff, error) {
+	res := make([]EntryDiff, 0, 0)
+	s, err := xfs.Stat(c, path, did)
+	if err != nil {
+		return res, err
+	}
+	if checkType {
+		olds, err := xfs.Stat(c, path, sid)
+		if err != nil {
+			return res, err
+		}
+		if olds.FileType != s.FileType {
+			return res, errors.New("diff file type can't be diff")
+		}
+	}
+
+	if s.FileType == "directory" {
 		xres, err := diffSnapshotsDir(c, sid, did, path)
 		if err != nil {
 			return res, err
 		}
-		for _, entry := range xres {
-			diffEntry := EntryDiff {
-				Name:entry.Name,
-				Type:entry.Type,
-			}
-			res = append(res, diffEntry)
-		}
-		if recursive {
-			for _, e := range xres {
-				childres, err := DiffSnapshots(c, sid, did, filepath.Join(path, e.Name), recursive)
+		for _, e := range xres {
+			if e.Type == "DELETE" {
+				dres, err := deleteDiff(c, filepath.Join(path, e.Name), sid)
 				if err != nil {
 					return res, err
 				}
-				res = append(res, childres...)
+				res = append(res, dres...)
+			} else if e.Type == "CREATE" {
+				cres, err := createDiff(c, filepath.Join(path, e.Name), did)
+				if err != nil {
+					return res, err
+				}
+				res = append(res, cres...)
+			} else {
+				olds, err := xfs.Stat(c, filepath.Join(path, e.Name), sid)
+				if err != nil {
+					return res, err
+				}
+				news, err := xfs.Stat(c, filepath.Join(path, e.Name), did)
+				if err != nil {
+					return res, err
+				}
+				if olds.FileType == news.FileType {
+					res = append(res, EntryDiff{
+						Name: filepath.Join(path, e.Name),
+						Type: e.Type,
+					})
+					if olds.FileType == "directory" {
+						childres, err := diffSnapshots(c, sid, did, filepath.Join(path, e.Name), false)
+						if err != nil {
+							return res, err
+						}
+						res = append(res, childres...)
+					}
+				} else {
+					dres, err := deleteDiff(c, filepath.Join(path, e.Name), sid)
+					if err != nil {
+						return res, err
+					}
+					res = append(res, dres...)
+					cres, err := createDiff(c, filepath.Join(path, e.Name), did)
+					if err != nil {
+						return res, err
+					}
+					res = append(res, cres...)
+				}
 			}
 		}
 	} else {
@@ -180,13 +281,29 @@ func DiffSnapshots(c *xclient.Client, sid, did int, path string, recursive bool)
 			return res, err
 		}
 		if len(xres) != 0 {
-			diffEntry := EntryDiff {
-				Name:path,
-				Type:"MODIFY",
+			diffEntry := EntryDiff{
+				Name: path,
+				Type: "MODIFY",
 			}
 			res = append(res, diffEntry)
 		}
 	}
-
 	return res, nil
+}
+
+func DiffSnapshots(c *xclient.Client, sid, did, path string) (string, error) {
+	res, err := diffSnapshots(c, sid, did, path, true)
+	if err != nil {
+		return "", err
+	}
+	/*
+	for i, e := range res {
+		fmt.Printf("No.%d name: %s, type %s\n", i, e.Name, e.Type)
+	}
+	*/
+	jstr, err := json.Marshal(res)
+	if err != nil {
+		return "", err
+	}
+	return string(jstr), nil
 }

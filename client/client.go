@@ -35,7 +35,6 @@ var CallError = errors.New("response status is not ok")
 func (c *Client) Do(req *http.Request) (io.ReadCloser, error) {
 	req.Header.Set(nameAuth, "Bearer"+c.token)
 
-	fmt.Printf("req: %v\n", req)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		fmt.Printf("Do %v fail %v\n", req, err)
@@ -48,7 +47,7 @@ func (c *Client) Do(req *http.Request) (io.ReadCloser, error) {
 	return resp.Body, nil
 }
 
-func NewClient(ip string) (*Client, error) {
+func NewClient(ip, username, password string) (*Client, error) {
 	c := Client{
 		Ip: ip,
 		client: &http.Client{
@@ -59,8 +58,8 @@ func NewClient(ip string) (*Client, error) {
 			},
 		},
 		auth: opfsAuth{
-			Username: "admin",
-			Password: "admin",
+			Username: username,
+			Password: password,
 		},
 	}
 	b, err := json.Marshal(c.auth)

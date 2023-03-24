@@ -2,115 +2,128 @@ package main
 
 import (
 	"flag"
-//	"fmt"
+	"fmt"
 	"log"
-	"net"
-	"strconv"
-//	"time"
+	"os"
+	"regexp"
 
 	xclient "github.com/openfs/rsync-tools/client"
 	xsnap "github.com/openfs/rsync-tools/snapshot"
-//	xfs "github.com/openfs/rsync-tools/fs"
-	xout "github.com/openfs/rsync-tools/output"
 )
 
 const (
-	//defaultIp = "127.0.0.1"
-	usageIp        = "ip address of server"
-	usageSid       = "source snapshot id"
-	usageDid       = "destination snapshot id"
-	defaultPath    = "/"
-	usagePath      = "compare file path"
-	usageOutput    = "output file path"
-	usageStyle     = "format style of output"
-	usageRecursive = "recursive directory"
+	usageHost     = "hostname of server include ip"
+	usageUsername = "username for login"
+	usagePassword = "password for login"
+	usageSid      = "source snapshot id"
+	usageDid      = "destination snapshot id"
+	usagePath     = "compare file path"
 )
 
+const (
+	defaultPath = "/"
+	defaultUser = "admin"
+	defaultPass = "admin"
+)
+
+const (
+	keyHost        = "HOST"
+	keyUsername    = "USERNAME"
+	keyPassword    = "PASSWORD"
+	keySid         = "SID"
+	keyDid         = "DID"
+	keyComparePath = "COMPAREPATH"
+)
+
+func osEnvSet() []string {
+	res := make([]string, 6, 6)
+	res[0] = os.Getenv(keyHost)
+	res[1] = os.Getenv(keyUsername)
+	res[2] = os.Getenv(keyPassword)
+	res[3] = os.Getenv(keySid)
+	res[4] = os.Getenv(keyDid)
+	res[5] = os.Getenv(keyComparePath)
+
+	return res
+}
+
+func setArg(e string, a string, i int) (string, int) {
+	if e != "" {
+		return e, i
+	}
+	return a, i + 1
+}
 
 func main() {
-	var ip string
-	flag.StringVar(&ip, "s", "", usageIp)
-	flag.StringVar(&ip, "serviceip", "", usageIp)
-	var sid int
-	flag.IntVar(&sid, "f", 0, usageSid)
-	flag.IntVar(&sid, "sourceid", 0, usageSid)
-	var did int
-	flag.IntVar(&did, "t", 0, usageDid)
-	flag.IntVar(&did, "destid", 0, usageDid)
-	var comparePath string
-	flag.StringVar(&comparePath, "p", defaultPath, usagePath)
-	flag.StringVar(&comparePath, "comparepath", defaultPath, usagePath)
-	var outputPath string
-	flag.StringVar(&outputPath, "o", "", usageOutput)
-	flag.StringVar(&outputPath, "outputpath", "", usageOutput)
-	var formatStyle string
-	flag.StringVar(&formatStyle, "c", "standard", usageStyle)
-	flag.StringVar(&formatStyle, "comparestyle", "standard", usageStyle)
-	var r bool
-	flag.BoolVar(&r, "r", true, usageRecursive)
-	flag.BoolVar(&r, "recursive", true, usageRecursive)
+	var host string
+	flag.StringVar(&host, "h", "", usageHost)
+	flag.StringVar(&host, "host", "", usageHost)
+	var username string
+	flag.StringVar(&username, "u", "", usageUsername)
+	flag.StringVar(&username, "username", "", usageUsername)
+	var password string
+	flag.StringVar(&password, "p", "", usagePassword)
+	flag.StringVar(&password, "password", "", usagePassword)
+	var sid string
+	flag.StringVar(&sid, "f", "", usageSid)
+	flag.StringVar(&sid, "sourceid", "", usageSid)
+	var did string
+	flag.StringVar(&did, "t", "", usageDid)
+	flag.StringVar(&did, "destid", "", usageDid)
+	var path string
+	flag.StringVar(&path, "c", "", usagePath)
+	flag.StringVar(&path, "comparepath", "", usagePath)
 	flag.Parse()
-	i := 0
-	if ip == "" {
-		ip = flag.Arg(i)
-		i++
-	}
-	var err error
-	if sid == 0 && flag.Arg(i) != "" {
-		sid, err = strconv.Atoi(flag.Arg(i))
-		if err != nil {
-			log.Fatal("set invalid source id")
-		}
-		i++
-	}
-	if did == 0 && flag.Arg(i) != "" {
-		did, err = strconv.Atoi(flag.Arg(i))
-		if err != nil {
-			log.Fatal("set invalid source id")
-		}
-		i++
-	}
-	if flag.Arg(i) != "" {
-		comparePath = flag.Arg(i)
-		i++
-	}
-	if flag.Arg(i) != "" {
-		outputPath = flag.Arg(i)
-		i++
-	}
-	if flag.Arg(i) != "" {
-		formatStyle = flag.Arg(i)
-		i++
-	}
-
-	//fmt.Printf("args %v, ncount %v, count %v, ip %v\n", flag.Args(), flag.NArg(), flag.NFlag(), ip)
-	if nil == net.ParseIP(ip) || nil == net.ParseIP(ip).To4() {
-		log.Fatal("service ip only support IPv4")
-	}
-	if sid == 0 || did == 0 {
-		log.Fatal("source id and destination id should be set id of snapshot")
-	}
-	if !xout.InStyleList(formatStyle) {
-		log.Fatal("style only one of %v", xout.StyleList)
-	}
-	ip = net.ParseIP(ip).To4().String()
 
 	/*
-	fmt.Printf("param gets service ip %s, sid %d, did %d, compare %s, output %s, style %s, recursive %t\n",
-		ip, sid, did, comparePath, outputPath, formatStyle, r)
+		fmt.Printf("param gets service ip %s, sid %d, did %d, compare %s, output %s, style %s, recursive %t\n",
+			ip, sid, did, comparePath, outputPath, formatStyle, r)
 	*/
-	c, err := xclient.NewClient(ip)
+
+	envlist := osEnvSet()
+	i := 0
+	if host == "" {
+		host, i = setArg(envlist[0], flag.Arg(i), i)
+	}
+	if username == "" {
+		username, i = setArg(envlist[1], flag.Arg(i), i)
+	}
+	if password == "" {
+		password, i = setArg(envlist[2], flag.Arg(i), i)
+	}
+	if sid == "" {
+		sid, i = setArg(envlist[3], flag.Arg(i), i)
+	}
+	if did == "" {
+		did, i = setArg(envlist[4], flag.Arg(i), i)
+	}
+	if path == "" {
+		path, i = setArg(envlist[5], flag.Arg(i), i)
+	}
+	r := regexp.MustCompile(`\d`)
+	if host == "" ||
+		r.MatchString(sid) == false ||
+		r.MatchString(did) == false {
+		log.Fatal("invalid argument")
+	}
+
+	if username == "" && password == "" {
+		username = defaultUser
+		password = defaultPass
+	}
+
+	if path == "" {
+		path = defaultPath
+	}
+
+	c, err := xclient.NewClient(host, username, password)
 	if err != nil {
 		log.Fatal("new client fail")
 	}
 
-	diffs, err:= xsnap.DiffSnapshots(c, sid, did, comparePath, r)
+	diff, err := xsnap.DiffSnapshots(c, sid, did, path)
 	if err != nil {
 		log.Fatal("diff fail ", err)
 	}
-
-	err = xout.OutputFile(outputPath, formatStyle, diffs)
-	if err != nil {
-		log.Fatal("output fail ", err)
-	}
+	fmt.Printf("%v\n", diff)
 }
